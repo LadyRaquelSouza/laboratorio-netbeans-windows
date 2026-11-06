@@ -117,3 +117,91 @@ jobs:
           }
 
           Write-Host "SUCESSO: JDK funcional e arquivos do NetBeans presentes."
+
+
+      - name: Testar inicializacao do NetBeans 8.2
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $jdk = Join-Path $env:ProgramFiles "Java\jdk1.8.0_111"
+          $nb = Join-Path $env:ProgramFiles "NetBeans 8.2"
+
+          $exe = Join-Path $nb "bin\netbeans64.exe"
+          if (!(Test-Path $exe)) {
+            $exe = Join-Path $nb "bin\netbeans.exe"
+          }
+
+          if (!(Test-Path $exe)) {
+            throw "Executavel do NetBeans nao encontrado."
+          }
+
+          $usuario = Join-Path $env:RUNNER_TEMP "nb82-teste-usuario"
+          $cache = Join-Path $env:RUNNER_TEMP "nb82-teste-cache"
+          $log = Join-Path $usuario "var\log\messages.log"
+
+          New-Item -ItemType Directory -Force -Path $usuario, $cache | Out-Null
+
+          Write-Host "Iniciando NetBeans 8.2 com JDK 8u111..."
+
+          $argumentos = @(
+            "--nosplash",
+            "--nogui",
+            "--jdkhome", "`"$jdk`"",
+            "--userdir", "`"$usuario`"",
+            "--cachedir", "`"$cache`"",
+            "-J-Dplugin.manager.check.updates=false"
+          )
+
+          $processo = Start-Process -FilePath $exe -ArgumentList $argumentos -PassThru
+
+          $modulos = $false
+
+          try {
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 2
+
+              if (Test-Path $log) {
+                $conteudo = Get-Content $log -Raw
+
+                if ($conteudo -match "Turning on modules") {
+                  $modulos = $true
+                  break
+                }
+              }
+
+              $processo.Refresh()
+
+              if ($processo.HasExited -and $processo.ExitCode -ne 0) {
+                throw "NetBeans encerrou com erro: $($processo.ExitCode)"
+              }
+            }
+
+            if (Test-Path $log) {
+              Write-Host "=== REGISTROS DO NETBEANS ==="
+              Get-Content $log -Tail 60
+            } else {
+              throw "NetBeans nao produziu o log de inicializacao."
+            }
+
+            if (!$modulos) {
+              throw "Nao foi confirmada a ativacao dos modulos do NetBeans."
+            }
+
+            Write-Host "SUCESSO: NetBeans iniciou a plataforma e registrou a ativacao de modulos."
+          }
+          finally {
+            $processo.Refresh()
+            if (!$processo.HasExited) {
+              Stop-Process -Id $processo.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Guardar registros de inicializacao
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbeans-82-logs
+          path: ${{ runner.temp }}/nb82-teste-usuario/var/log/messages.log
+          if-no-files-found: warn
