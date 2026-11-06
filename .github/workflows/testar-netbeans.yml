@@ -1,0 +1,119 @@
+
+name: Testar instalador original do NetBeans
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  teste-windows:
+    runs-on: windows-2025
+    timeout-minutes: 40
+
+    steps:
+      - name: Preparar Python para o download
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Baixar instalador do Google Drive
+        shell: pwsh
+        run: |
+          python -m pip install --quiet gdown
+
+          $url = "https://drive.google.com/file/d/11Gd3vTcHQRlH7_hYN3lK3wqd4uojwZIp/view"
+          $arquivo = Join-Path $env:RUNNER_TEMP "jdk-8u111-nb-8_2-windows-x64.exe"
+
+          gdown $url -O $arquivo
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao baixar o arquivo do Drive."
+          }
+
+          if (!(Test-Path $arquivo)) {
+            throw "Instalador nao encontrado."
+          }
+
+          $tamanho = (Get-Item $arquivo).Length
+          Write-Host "Tamanho: $tamanho bytes"
+
+          if ($tamanho -ne 341868448) {
+            throw "Tamanho inesperado. Download incompleto ou arquivo alterado."
+          }
+
+          Get-FileHash $arquivo -Algorithm SHA256 | Format-List
+
+          $assinatura = Get-AuthenticodeSignature $arquivo
+          Write-Host "Assinatura digital: $($assinatura.Status)"
+          Write-Host "Publicador: $($assinatura.SignerCertificate.Subject)"
+
+      - name: Executar instalador original
+        shell: pwsh
+        run: |
+          $arquivo = Join-Path $env:RUNNER_TEMP "jdk-8u111-nb-8_2-windows-x64.exe"
+
+          Write-Host "Iniciando instalacao silenciosa..."
+
+          $processo = Start-Process -FilePath $arquivo -ArgumentList "--silent" -Wait -PassThru
+
+          Write-Host "Codigo de saida: $($processo.ExitCode)"
+
+          if ($processo.ExitCode -ne 0) {
+            throw "Instalador retornou erro."
+          }
+
+      - name: Verificar JDK e NetBeans
+        shell: pwsh
+        run: |
+          $jdk = Join-Path $env:ProgramFiles "Java\jdk1.8.0_111"
+          $nb = Join-Path $env:ProgramFiles "NetBeans 8.2"
+
+          $javac = Join-Path $jdk "bin\javac.exe"
+          $java = Join-Path $jdk "bin\java.exe"
+          $config = Join-Path $nb "etc\netbeans.conf"
+
+          if (!(Test-Path $javac)) {
+            throw "JDK 8u111 nao encontrado."
+          }
+
+          if (!(Test-Path $java)) {
+            throw "Executavel Java nao encontrado."
+          }
+
+          if (!(Test-Path $config)) {
+            throw "NetBeans 8.2 nao encontrado."
+          }
+
+          $launchers = @(
+            (Join-Path $nb "bin\netbeans64.exe"),
+            (Join-Path $nb "bin\netbeans.exe")
+          )
+
+          if (!($launchers | Where-Object { Test-Path $_ })) {
+            throw "Executavel do NetBeans nao encontrado."
+          }
+
+          Write-Host "JDK e NetBeans encontrados."
+
+          & $javac -version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Compilador Java falhou."
+          }
+
+          $fonte = Join-Path $env:RUNNER_TEMP "Teste.java"
+          Set-Content $fonte 'public class Teste { public static void main(String[] args) { System.out.println("JAVA_OK"); } }' -Encoding ascii
+
+          & $javac $fonte
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao compilar programa Java."
+          }
+
+          $resultado = & $java -cp $env:RUNNER_TEMP Teste
+
+          if ($resultado -ne "JAVA_OK") {
+            throw "Programa Java nao executou corretamente."
+          }
+
+          Write-Host "SUCESSO: JDK funcional e arquivos do NetBeans presentes."
